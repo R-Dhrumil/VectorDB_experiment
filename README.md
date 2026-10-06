@@ -43,9 +43,10 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-### 3. Start Development Server
+### 3. Start Development Server (Backend)
+To start the backend server, run the following command from inside the `BE` folder:
 ```powershell
-python -m uvicorn main:app --reload --port 8000
+.\venv\Scripts\python.exe -m uvicorn main:app --reload --port 8000
 ```
 Interactive API documentation will be available at: **`http://localhost:8000/docs`**
 
