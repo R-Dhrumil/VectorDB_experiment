@@ -42,6 +42,6 @@ def generate_rag_answer(query: str, retrieved_chunks: List[Dict[str, Any]]) -> s
     try:
         # Generate the answer using Gemini
         response = llm.invoke(formatted_prompt)
-        return response.content
+        return str(response.content)
     except Exception as e:
         return f"An error occurred while generating the answer: {str(e)}"
