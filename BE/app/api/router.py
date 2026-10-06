@@ -15,6 +15,7 @@ from app.database.vector_store import (
     list_documents,
     delete_document_by_id
 )
+from app.processing.generator import generate_rag_answer
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -22,6 +23,11 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 class QueryRequest(BaseModel):
     query: str = Field(..., description="User search query string")
     top_k: int = Field(default=3, ge=1, le=20, description="Number of top results to retrieve")
+    file_name_filter: Optional[str] = Field(default=None, description="Optional filter by specific filename")
+
+class AskRequest(BaseModel):
+    query: str = Field(..., description="User question to be answered by the LLM")
+    top_k: int = Field(default=5, ge=1, le=20, description="Number of context chunks to retrieve")
     file_name_filter: Optional[str] = Field(default=None, description="Optional filter by specific filename")
 
 class StoreTextRequest(BaseModel):
@@ -174,6 +180,45 @@ def query_documents(request: QueryRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Search Error: {str(e)}")
+
+
+@router.post("/ask")
+def ask_question(request: AskRequest):
+    """
+    Searches the vector database and uses Gemini LLM to generate an answer based on the retrieved context.
+    """
+    try:
+        vs = get_vector_store()
+        filter_dict = None
+        if request.file_name_filter:
+            filter_dict = {"file_name": request.file_name_filter}
+
+        # 1. Retrieve relevant chunks
+        results_with_score = vs.similarity_search_with_score(
+            request.query,
+            k=request.top_k,
+            filter=filter_dict
+        )
+
+        formatted_results = []
+        for doc, score in results_with_score:
+            formatted_results.append({
+                "content": doc.page_content,
+                "metadata": doc.metadata,
+                "distance_score": round(float(score), 4)
+            })
+            
+        # 2. Generate answer with Gemini
+        answer = generate_rag_answer(request.query, formatted_results)
+
+        return {
+            "query": request.query,
+            "answer": answer,
+            "context_chunks_used": len(formatted_results),
+            "sources": formatted_results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal Search/Generation Error: {str(e)}")
 
 
 @router.get("")

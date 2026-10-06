@@ -11,3 +11,4 @@ pypdf
 python-docx
 openpyxl
 docx2txt
+langchain-google-genai
