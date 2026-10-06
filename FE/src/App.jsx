@@ -5,21 +5,28 @@ import './index.css';
 const API_BASE = "http://localhost:8000/documents";
 
 function App() {
-  const [mode, setMode] = useState('upload'); // 'upload', 'paste', or 'ask'
-  const [chunking, setChunking] = useState('recursive');
-  const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
-  const [distanceMetric, setDistanceMetric] = useState('cosine');
-  const [topK, setTopK] = useState(5);
+  // --- Step 1: Ingestion States ---
+  const [inputTab, setInputTab] = useState('upload'); // 'upload' or 'paste'
   const [file, setFile] = useState(null);
   const [paragraphText, setParagraphText] = useState('');
   const [paragraphTitle, setParagraphTitle] = useState('');
-  const [question, setQuestion] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [result, setResult] = useState({ html: '<div class="placeholder">Waiting for input...</div>', type: '' });
+  const [chunking, setChunking] = useState('recursive');
+  const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
+  const [isIngesting, setIsIngesting] = useState(false);
+  const [ingestFeedback, setIngestFeedback] = useState(null);
+  const [isIngested, setIsIngested] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+
+  // --- Step 2: Query / Ask States ---
+  const [question, setQuestion] = useState('');
+  const [distanceMetric, setDistanceMetric] = useState('cosine');
+  const [topK, setTopK] = useState(5);
+  const [isAsking, setIsAsking] = useState(false);
+  const [askResult, setAskResult] = useState(null);
 
   const fileInputRef = useRef(null);
 
+  // --- Drag & Drop handlers ---
   const handleDrag = (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -45,83 +52,76 @@ function App() {
     }
   };
 
-  const handleUpload = async () => {
-    if (!file) {
-      setResult({ html: "Please select a file to upload first.", type: "error" });
+  // --- Ingestion Handler (Upload or Paste) ---
+  const handleIngest = async () => {
+    if (inputTab === 'upload' && !file) {
+      setIngestFeedback({ type: 'error', message: 'Please select a file to upload first.' });
+      return;
+    }
+    if (inputTab === 'paste' && !paragraphText.trim()) {
+      setIngestFeedback({ type: 'error', message: 'Please enter or paste a paragraph first.' });
       return;
     }
 
-    setIsLoading(true);
-    setResult({ html: '<div class="placeholder">Processing request...</div>', type: '' });
+    setIsIngesting(true);
+    setIngestFeedback(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('strategy', chunking);
-      formData.append('embedding_model', embeddingModel);
+      if (inputTab === 'upload') {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('strategy', chunking);
+        formData.append('embedding_model', embeddingModel);
 
-      const response = await fetch(`${API_BASE}/upload`, {
-        method: 'POST',
-        body: formData
-      });
+        const response = await fetch(`${API_BASE}/upload`, {
+          method: 'POST',
+          body: formData
+        });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Upload failed");
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Upload failed");
 
-      setResult({
-        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Task ID:</strong> ${data.task_id}<br><strong>Doc ID:</strong> ${data.doc_id}<br><strong>Model:</strong> <code>${data.embedding_model || embeddingModel}</code><br><br>The backend is extracting, chunking, and saving vectors to <strong>PostgreSQL (pgvector)</strong> in the background. Switch to "Ask Question" to test similarity retrieval!`,
-        type: 'success'
-      });
+        setIngestFeedback({
+          type: 'success',
+          message: `✅ File "${data.filename}" accepted! Processing & embeddings are being saved to PostgreSQL (pgvector).`,
+          details: `Doc ID: ${data.doc_id} • Strategy: ${chunking}`
+        });
+        setIsIngested(true);
+      } else {
+        const response = await fetch(`${API_BASE}/raw`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: paragraphText,
+            title: paragraphTitle.trim() || undefined,
+            strategy: chunking,
+            embedding_model: embeddingModel
+          })
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Ingestion failed");
+
+        setIngestFeedback({
+          type: 'success',
+          message: `✅ Paragraph successfully chunked and stored in PostgreSQL!`,
+          details: `Created ${data.chunks_created} chunks • Strategy: ${data.strategy} • Doc ID: ${data.doc_id}`
+        });
+        setIsIngested(true);
+      }
     } catch (error) {
-      setResult({ html: `Error: ${error.message}`, type: "error" });
+      setIngestFeedback({ type: 'error', message: `Error: ${error.message}` });
     } finally {
-      setIsLoading(false);
+      setIsIngesting(false);
     }
   };
 
-  const handlePasteIngest = async () => {
-    if (!paragraphText.trim()) {
-      setResult({ html: "Please enter or paste a paragraph first.", type: "error" });
-      return;
-    }
-
-    setIsLoading(true);
-    setResult({ html: '<div class="placeholder">Chunking and embedding paragraph in PostgreSQL...</div>', type: '' });
-
-    try {
-      const response = await fetch(`${API_BASE}/raw`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: paragraphText,
-          title: paragraphTitle.trim() || undefined,
-          strategy: chunking,
-          embedding_model: embeddingModel
-        })
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Ingestion failed");
-
-      setResult({
-        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Title/Snippet:</strong> <code>${data.title}</code><br><strong>Doc ID:</strong> <code>${data.doc_id}</code><br><strong>Chunks Created:</strong> ${data.chunks_created}<br><strong>Strategy:</strong> <code>${data.strategy}</code><br><strong>Model:</strong> <code>${data.embedding_model}</code><br><br>Paragraph is saved! Switch to <strong>"Ask Question"</strong> to run similarity queries against it.`,
-        type: 'success'
-      });
-    } catch (error) {
-      setResult({ html: `Error: ${error.message}`, type: "error" });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+  // --- Ask Question Handler ---
   const handleAsk = async () => {
-    if (!question.trim()) {
-      setResult({ html: "Please type a question.", type: "error" });
-      return;
-    }
+    if (!question.trim()) return;
 
-    setIsLoading(true);
-    setResult({ html: '<div class="placeholder">Processing request...</div>', type: '' });
+    setIsAsking(true);
+    setAskResult({ html: '<div class="placeholder">Searching pgvector & generating answer with Gemini...</div>', type: '' });
 
     try {
       const response = await fetch(`${API_BASE}/ask`, {
@@ -140,30 +140,23 @@ function App() {
 
       const formattedAnswer = data.answer.replace(/\n/g, '<br>');
 
-      setResult({
+      setAskResult({
         html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Chunks: ${data.context_chunks_used} &bull; Metric: <code>${data.distance_metric || distanceMetric}</code> &bull; Embedding: <code>${data.embedding_model || embeddingModel}</code></small>`,
         type: ''
       });
     } catch (error) {
-      setResult({ html: `Error: ${error.message}`, type: "error" });
+      setAskResult({ html: `Error: ${error.message}`, type: 'error' });
     } finally {
-      setIsLoading(false);
+      setIsAsking(false);
     }
   };
-
-  const handleSubmit = () => {
-    if (mode === 'upload') handleUpload();
-    else if (mode === 'paste') handlePasteIngest();
-    else handleAsk();
-  };
-
 
   return (
     <div className="app-container">
       <main className="glass-card">
         <header>
-          <h1>RAG Vector DB</h1>
-          <p>Upload a document to ingest, or type a question to ask the LLM.</p>
+          <h1>RAG Vector DB Experiment</h1>
+          <p>Process multi-format documents, store vector embeddings in PostgreSQL, and evaluate retrieval formulas.</p>
           <div className="system-badge">
             <span className="badge-item">🗄️ PostgreSQL (pgvector)</span>
             <span className="badge-dot">•</span>
@@ -173,33 +166,37 @@ function App() {
           </div>
         </header>
 
-        <section className="input-section">
+        {/* ================= STEP 1: INGESTION & CHUNKING ================= */}
+        <section className="step-section">
+          <div className="step-header">
+            <div className="step-title">
+              <span className="step-num">1</span>
+              <span>Document Ingestion & Chunking</span>
+            </div>
+            <span className={`step-status ${isIngested ? 'active' : ''}`}>
+              {isIngested ? '✓ Ready' : 'Pending Ingestion'}
+            </span>
+          </div>
+
           <div className="mode-toggle">
             <button
               type="button"
-              className={`mode-btn ${mode === 'upload' ? 'active' : ''}`}
-              onClick={() => { setMode('upload'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
+              className={`mode-btn ${inputTab === 'upload' ? 'active' : ''}`}
+              onClick={() => { setInputTab('upload'); setIngestFeedback(null); }}
             >
               Upload File
             </button>
             <button
               type="button"
-              className={`mode-btn ${mode === 'paste' ? 'active' : ''}`}
-              onClick={() => { setMode('paste'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
+              className={`mode-btn ${inputTab === 'paste' ? 'active' : ''}`}
+              onClick={() => { setInputTab('paste'); setIngestFeedback(null); }}
             >
               Paste Paragraph
-            </button>
-            <button
-              type="button"
-              className={`mode-btn ${mode === 'ask' ? 'active' : ''}`}
-              onClick={() => { setMode('ask'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
-            >
-              Ask Question
             </button>
           </div>
 
           <div className="input-zones">
-            {mode === 'upload' && (
+            {inputTab === 'upload' ? (
               <div
                 className={`dropzone ${dragActive ? 'dragover' : ''}`}
                 onDragEnter={handleDrag}
@@ -208,8 +205,8 @@ function App() {
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
               >
-                <UploadCloud className="drop-icon" size={40} />
-                <p className="drop-text">Drag & drop a file here, or click to browse</p>
+                <UploadCloud className="drop-icon" size={36} />
+                <p className="drop-text">Drag & drop your file here, or click to browse</p>
                 <p className="supported-formats">Supports PDF, DOCX, XLSX, TXT, MD</p>
                 <input
                   type="file"
@@ -220,14 +217,12 @@ function App() {
                 />
                 {file && <div className="file-name-display">Selected: {file.name}</div>}
               </div>
-            )}
-
-            {mode === 'paste' && (
+            ) : (
               <div className="textzone">
                 <input
                   type="text"
                   className="title-input"
-                  placeholder="Optional title / label (e.g. Return Policy, Article Excerpt)"
+                  placeholder="Snippet Title / Label (e.g. Return Policy, Project Notes)"
                   value={paragraphTitle}
                   onChange={(e) => setParagraphTitle(e.target.value)}
                 />
@@ -238,21 +233,10 @@ function App() {
                 ></textarea>
               </div>
             )}
-
-            {mode === 'ask' && (
-              <div className="textzone">
-                <textarea
-                  placeholder="e.g., What are the main points? Ask any conceptual question..."
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                ></textarea>
-              </div>
-            )}
           </div>
-        </section>
 
-        {(mode === 'upload' || mode === 'paste') && (
-          <section className="options-section">
+          {/* Chunking Strategy */}
+          <div className="options-section" style={{ marginTop: '1rem' }}>
             <label>Chunking Strategy</label>
             <div className="pill-group">
               {['recursive', 'fixed', 'sentence', 'paragraph'].map(type => (
@@ -266,91 +250,159 @@ function App() {
                 </button>
               ))}
             </div>
-          </section>
-        )}
-
-        <section className="options-section">
-          <label>Embedding Model (Ollama Local)</label>
-          <div className="pill-group">
-            {[
-              { id: 'nomic-embed-text', label: 'nomic-embed-text (768-d)' },
-
-            ].map(m => (
-              <button
-                key={m.id}
-                type="button"
-                className={`pill ${embeddingModel === m.id ? 'active' : ''}`}
-                onClick={() => setEmbeddingModel(m.id)}
-              >
-                {m.label}
-              </button>
-            ))}
           </div>
-        </section>
 
-        {mode === 'ask' && (
-          <>
-            <section className="options-section">
-              <label>Distance Formula (pgvector Metric)</label>
-              <div className="pill-group">
-                {[
-                  { id: 'cosine', label: 'Cosine (<=>)' },
-                  { id: 'l2', label: 'Euclidean / L2 (<->)' },
-                  { id: 'inner_product', label: 'Inner Product (<#>)' }
-                ].map(m => (
-                  <button
-                    key={m.id}
-                    type="button"
-                    className={`pill ${distanceMetric === m.id ? 'active' : ''}`}
-                    onClick={() => setDistanceMetric(m.id)}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            </section>
+          {/* Embedding Model */}
+          <div className="options-section">
+            <label>Embedding Model (Ollama Local)</label>
+            <div className="pill-group">
+              {[
+                { id: 'nomic-embed-text', label: 'nomic-embed-text (768-d)' }
+              ].map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`pill ${embeddingModel === m.id ? 'active' : ''}`}
+                  onClick={() => setEmbeddingModel(m.id)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-            <section className="options-section">
-              <label>Top K Results to Retrieve</label>
-              <div className="pill-group">
-                {[1, 3, 5, 10].map(k => (
-                  <button
-                    key={k}
-                    type="button"
-                    className={`pill ${topK === k ? 'active' : ''}`}
-                    onClick={() => setTopK(k)}
-                  >
-                    Top {k}
-                  </button>
-                ))}
-              </div>
-            </section>
-          </>
-        )}
-
-        <section className="submit-section">
+          {/* Ingest Action Button */}
           <button
             type="button"
             className="primary-btn"
-            onClick={handleSubmit}
-            disabled={isLoading}
+            onClick={handleIngest}
+            disabled={isIngesting}
           >
-            {isLoading ? (
+            {isIngesting ? (
               <div className="spinner"></div>
             ) : (
-              <span className="btn-text">
-                {mode === 'upload' ? 'Upload & Ingest File' : mode === 'paste' ? 'Ingest Paragraph' : 'Ask Question'}
-              </span>
+              <span>⚡ Process & Store Embeddings in pgvector</span>
             )}
           </button>
+
+          {/* Ingestion Feedback Banner */}
+          {ingestFeedback && (
+            <div className={`ingest-feedback ${ingestFeedback.type}`}>
+              <div><strong>{ingestFeedback.message}</strong></div>
+              {ingestFeedback.details && <small style={{ opacity: 0.85 }}>{ingestFeedback.details}</small>}
+            </div>
+          )}
         </section>
 
-        <section className="result-section">
-          <label>Result</label>
-          <div
-            className={`result-box ${result.type}`}
-            dangerouslySetInnerHTML={{ __html: result.html }}
-          ></div>
+        <hr className="section-divider" />
+
+        {/* ================= STEP 2: ASK QUESTION & SEARCH ================= */}
+        <section className="step-section">
+          <div className="step-header">
+            <div className="step-title">
+              <span className="step-num">2</span>
+              <span>Ask Question & Semantic Retrieval</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <span className={`step-status ${isIngested ? 'active' : 'locked'}`}>
+                {isIngested ? '🟢 Active & Ready' : '🔒 Locked (Ingest Step 1 First)'}
+              </span>
+              {!isIngested && (
+                <button
+                  type="button"
+                  className="unlock-link"
+                  onClick={() => setIsIngested(true)}
+                  title="Click to unlock if you already have documents stored in database"
+                >
+                  (Or unlock now)
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Evaluation Settings (Formula & Top K) */}
+          <div className="options-section">
+            <label>Distance Formula (pgvector Metric)</label>
+            <div className="pill-group">
+              {[
+                { id: 'cosine', label: 'Cosine (<=>)' },
+                { id: 'l2', label: 'Euclidean / L2 (<->)' },
+                { id: 'inner_product', label: 'Inner Product (<#>)' }
+              ].map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`pill ${distanceMetric === m.id ? 'active' : ''}`}
+                  onClick={() => setDistanceMetric(m.id)}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="options-section">
+            <label>Top K Chunks to Retrieve</label>
+            <div className="pill-group">
+              {[1, 3, 5, 10].map(k => (
+                <button
+                  key={k}
+                  type="button"
+                  className={`pill ${topK === k ? 'active' : ''}`}
+                  onClick={() => setTopK(k)}
+                >
+                  Top {k}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Unified Question Field with Integrated Ask Button */}
+          <div className={`ask-box-wrapper ${!isIngested ? 'disabled' : ''}`}>
+            <textarea
+              className="ask-textarea"
+              placeholder={isIngested ? "Ask any question or search query based on your stored documents..." : "Please ingest a document or paragraph above to unlock search..."}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (isIngested && !isAsking && question.trim()) {
+                    handleAsk();
+                  }
+                }
+              }}
+              disabled={!isIngested}
+            />
+            <div className="ask-box-footer">
+              <span className="ask-hint">
+                {isIngested ? "Press Enter to search • Shift+Enter for new line" : "Ingest data in Step 1 first"}
+              </span>
+              <button
+                type="button"
+                className="ask-action-btn"
+                onClick={handleAsk}
+                disabled={!isIngested || isAsking || !question.trim()}
+              >
+                {isAsking ? (
+                  <div className="spinner" style={{ width: 14, height: 14, borderWidth: 2 }} />
+                ) : (
+                  <span>Ask Question →</span>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Query Results Box */}
+          {askResult && (
+            <div className="result-section" style={{ marginTop: '1.25rem' }}>
+              <label>Answer & Retrieved Context</label>
+              <div
+                className={`result-box ${askResult.type}`}
+                dangerouslySetInnerHTML={{ __html: askResult.html }}
+              ></div>
+            </div>
+          )}
         </section>
       </main>
     </div>
