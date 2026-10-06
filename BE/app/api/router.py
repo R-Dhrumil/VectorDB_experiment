@@ -1,15 +1,22 @@
 import os
 import uuid
 import hashlib
-from typing import Dict, Any, Optional
+from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
-from app.config import MAX_FILE_SIZE_BYTES, ALLOWED_EXTENSIONS, DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP
+from app.core.config import (
+    MAX_FILE_SIZE_BYTES,
+    ALLOWED_EXTENSIONS,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_EMBEDDING_MODEL
+)
 from app.extractors.factory import extract_document_blocks
 from app.processing.chunker import chunk_document_blocks
 from app.database.vector_store import (
-    get_vector_store,
+    add_document_chunks,
+    similarity_search,
     set_task_status,
     get_task_status,
     list_documents,
@@ -24,18 +31,15 @@ class QueryRequest(BaseModel):
     query: str = Field(..., description="User search query string")
     top_k: int = Field(default=3, ge=1, le=20, description="Number of top results to retrieve")
     file_name_filter: Optional[str] = Field(default=None, description="Optional filter by specific filename")
+    embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, description="Ollama embedding model to use")
+
 
 class AskRequest(BaseModel):
     query: str = Field(..., description="User question to be answered by the LLM")
     top_k: int = Field(default=5, ge=1, le=20, description="Number of context chunks to retrieve")
     file_name_filter: Optional[str] = Field(default=None, description="Optional filter by specific filename")
+    embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, description="Ollama embedding model to use")
 
-class StoreTextRequest(BaseModel):
-    text: str
-    file_name: str = "raw_text.txt"
-    strategy: str = "recursive"
-    chunk_size: int = DEFAULT_CHUNK_SIZE
-    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
 
 # --- Background Worker Function ---
 def process_file_background(
@@ -45,15 +49,16 @@ def process_file_background(
     filename: str,
     strategy: str,
     chunk_size: int,
-    chunk_overlap: int
+    chunk_overlap: int,
+    embedding_model: str
 ):
     try:
         set_task_status(task_id, "PROCESSING", {"doc_id": doc_id, "filename": filename})
 
-        # 1. Extract text blocks based on extension
+        # 1. Extract text blocks based on file extension
         blocks = extract_document_blocks(file_bytes, filename)
 
-        # 2. Clean and chunk blocks into LangChain Documents
+        # 2. Clean and chunk blocks into Document objects
         chunks = chunk_document_blocks(
             blocks=blocks,
             doc_id=doc_id,
@@ -67,15 +72,20 @@ def process_file_background(
             set_task_status(task_id, "FAILED", {"error": "No printable text could be extracted from the document."})
             return
 
-        # 3. Add to ChromaDB vector store
-        vector_store = get_vector_store()
-        vector_store.add_documents(chunks)
+        # 3. Embed with Ollama and store in PostgreSQL pgvector
+        inserted_count = add_document_chunks(
+            chunks=chunks,
+            doc_id=doc_id,
+            file_name=filename,
+            model_name=embedding_model
+        )
 
         set_task_status(task_id, "COMPLETED", {
             "doc_id": doc_id,
             "filename": filename,
-            "chunks_created": len(chunks),
-            "strategy": strategy
+            "chunks_created": inserted_count,
+            "strategy": strategy,
+            "embedding_model": embedding_model
         })
 
     except Exception as e:
@@ -90,11 +100,12 @@ async def upload_document(
     background_tasks: BackgroundTasks = BackgroundTasks(),
     strategy: str = Form("recursive"),
     chunk_size: int = Form(DEFAULT_CHUNK_SIZE),
-    chunk_overlap: int = Form(DEFAULT_CHUNK_OVERLAP)
+    chunk_overlap: int = Form(DEFAULT_CHUNK_OVERLAP),
+    embedding_model: str = Form(DEFAULT_EMBEDDING_MODEL)
 ):
     """
     Accepts PDF, DOCX, XLSX, or TXT file uploads.
-    Enqueues async text extraction, chunking, and embedding generation.
+    Enqueues async text extraction, chunking, and pgvector storage via Ollama embeddings.
     """
     safe_filename = os.path.basename(file.filename or "uploaded_file.bin")
     ext = os.path.splitext(safe_filename)[1].lower()
@@ -126,14 +137,16 @@ async def upload_document(
         filename=safe_filename,
         strategy=strategy,
         chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
+        chunk_overlap=chunk_overlap,
+        embedding_model=embedding_model
     )
 
     return {
-        "message": "File upload accepted. Processing in background.",
+        "message": "File upload accepted. Processing and embedding in background.",
         "task_id": task_id,
         "doc_id": doc_id,
-        "filename": safe_filename
+        "filename": safe_filename,
+        "embedding_model": embedding_model
     }
 
 
@@ -151,90 +164,76 @@ def get_task_progress(task_id: str):
 @router.post("/query")
 def query_documents(request: QueryRequest):
     """
-    Searches the vector database for chunks semantically similar to the query.
+    Searches PostgreSQL pgvector for chunks semantically similar to the query.
     """
     try:
-        vs = get_vector_store()
-        filter_dict = None
-        if request.file_name_filter:
-            filter_dict = {"file_name": request.file_name_filter}
-
-        results_with_score = vs.similarity_search_with_score(
-            request.query,
+        results = similarity_search(
+            query=request.query,
             k=request.top_k,
-            filter=filter_dict
+            file_name_filter=request.file_name_filter,
+            model_name=request.embedding_model
         )
-
-        formatted_results = []
-        for doc, score in results_with_score:
-            formatted_results.append({
-                "content": doc.page_content,
-                "metadata": doc.metadata,
-                "distance_score": round(float(score), 4)
-            })
 
         return {
             "query": request.query,
-            "results_count": len(formatted_results),
-            "results": formatted_results
+            "embedding_model": request.embedding_model,
+            "results_count": len(results),
+            "results": results
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Search Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Search Error: {str(e)}")
 
 
 @router.post("/ask")
 def ask_question(request: AskRequest):
     """
-    Searches the vector database and uses Gemini LLM to generate an answer based on the retrieved context.
+    Searches pgvector using Ollama embeddings and uses Gemini LLM to generate an answer.
     """
     try:
-        vs = get_vector_store()
-        filter_dict = None
-        if request.file_name_filter:
-            filter_dict = {"file_name": request.file_name_filter}
-
-        # 1. Retrieve relevant chunks
-        results_with_score = vs.similarity_search_with_score(
-            request.query,
+        # 1. Retrieve relevant chunks from pgvector
+        results = similarity_search(
+            query=request.query,
             k=request.top_k,
-            filter=filter_dict
+            file_name_filter=request.file_name_filter,
+            model_name=request.embedding_model
         )
 
-        formatted_results = []
-        for doc, score in results_with_score:
-            formatted_results.append({
-                "content": doc.page_content,
-                "metadata": doc.metadata,
-                "distance_score": round(float(score), 4)
-            })
-            
         # 2. Generate answer with Gemini
-        answer = generate_rag_answer(request.query, formatted_results)
+        answer = generate_rag_answer(request.query, results)
 
         return {
             "query": request.query,
+            "embedding_model": request.embedding_model,
             "answer": answer,
-            "context_chunks_used": len(formatted_results),
-            "sources": formatted_results
+            "context_chunks_used": len(results),
+            "sources": results
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal Search/Generation Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"RAG Error: {str(e)}")
 
 
 @router.get("")
 def get_all_documents():
     """
-    Lists all documents currently stored in the vector database with chunk counts.
+    Lists all documents currently stored in PostgreSQL pgvector with chunk counts.
     """
-    return {"documents": list_documents()}
+    try:
+        return {"documents": list_documents()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
 
 
 @router.delete("/{doc_id}")
 def delete_document(doc_id: str):
     """
-    Deletes a document and all of its associated vector chunks from the database.
+    Deletes a document and all of its associated vector chunks from PostgreSQL pgvector.
     """
-    deleted_count = delete_document_by_id(doc_id)
-    if deleted_count == 0:
-        raise HTTPException(status_code=404, detail=f"No document found with ID '{doc_id}'")
-    return {"message": f"Successfully deleted document '{doc_id}' and {deleted_count} chunks."}
+    try:
+        deleted_count = delete_document_by_id(doc_id)
+        if deleted_count == 0:
+            raise HTTPException(status_code=404, detail=f"No document found with ID '{doc_id}'")
+        return {"message": f"Successfully deleted document '{doc_id}' and {deleted_count} chunks from pgvector."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Deletion Error: {str(e)}")

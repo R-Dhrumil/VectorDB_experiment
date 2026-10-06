@@ -1,8 +1,10 @@
 {
   "venvPath": "BE",
   "venv": "venv",
+  "pythonVersion": "3.14",
+  "pythonPlatform": "Darwin",
   "extraPaths": [
     "BE",
-    "BE/venv/Lib/site-packages"
+    "BE/venv/lib/python3.14/site-packages"
   ]
 }

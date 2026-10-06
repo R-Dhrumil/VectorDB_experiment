@@ -1,64 +1,266 @@
-import os
+import json
+import psycopg2
+from psycopg2.extras import RealDictCursor, execute_values
 from typing import Dict, Any, List, Optional
-from langchain_chroma import Chroma
-from langchain_huggingface import HuggingFaceEmbeddings
-from app.config import PERSIST_DIRECTORY, COLLECTION_NAME, EMBEDDING_MODEL_NAME
+from app.core.config import (
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    POSTGRES_DB,
+    POSTGRES_USER,
+    POSTGRES_PASSWORD,
+    PG_TABLE_NAME,
+    EMBEDDING_DIMENSION,
+    DEFAULT_EMBEDDING_MODEL
+)
+from app.database.embeddings import get_embedding
 
-# Global vector store singleton & background task state registry
-_embeddings_instance = None
-_vector_store_instance = None
+# Background task state registry
 _background_tasks_db: Dict[str, Dict[str, Any]] = {}
 
-def get_embeddings():
-    global _embeddings_instance
-    if _embeddings_instance is None:
-        _embeddings_instance = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
-    return _embeddings_instance
 
-def get_vector_store() -> Chroma:
-    global _vector_store_instance
-    if _vector_store_instance is None:
-        os.makedirs(PERSIST_DIRECTORY, exist_ok=True)
-        _vector_store_instance = Chroma(
-            collection_name=COLLECTION_NAME,
-            embedding_function=get_embeddings(),
-            persist_directory=PERSIST_DIRECTORY
-        )
-    return _vector_store_instance
+def get_db_connection():
+    """
+    Creates and returns a connection to the PostgreSQL database.
+    """
+    return psycopg2.connect(
+        host=POSTGRES_HOST,
+        port=POSTGRES_PORT,
+        dbname=POSTGRES_DB,
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+        connect_timeout=5
+    )
 
+
+def init_db():
+    """
+    Initializes PostgreSQL with pgvector:
+    1. Installs the vector extension if not present.
+    2. Creates the document chunks table with vector column.
+    3. Creates HNSW index for fast approximate nearest neighbor search.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            # 1. Enable pgvector extension
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            
+            # 2. Create chunks table
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {PG_TABLE_NAME} (
+                    id BIGSERIAL PRIMARY KEY,
+                    doc_id VARCHAR(64) NOT NULL,
+                    file_name VARCHAR(255) NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata JSONB DEFAULT '{{}}'::jsonb,
+                    embedding vector({EMBEDDING_DIMENSION}) NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+            # 3. Create HNSW vector index using cosine distance
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {PG_TABLE_NAME}_embedding_hnsw_idx 
+                ON {PG_TABLE_NAME} USING hnsw (embedding vector_cosine_ops);
+            """)
+
+            # 4. Create standard indexes for filtering and deletions
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {PG_TABLE_NAME}_doc_id_idx 
+                ON {PG_TABLE_NAME} (doc_id);
+            """)
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {PG_TABLE_NAME}_file_name_idx 
+                ON {PG_TABLE_NAME} (file_name);
+            """)
+
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_document_chunks(
+    chunks: List[Any], 
+    doc_id: str, 
+    file_name: str, 
+    model_name: str = DEFAULT_EMBEDDING_MODEL
+) -> int:
+    """
+    Embeds document chunks using Ollama and stores them in PostgreSQL pgvector.
+    
+    :param chunks: List of LangChain Document objects.
+    :param doc_id: Unique document identifier.
+    :param file_name: Name of the original file.
+    :param model_name: Ollama embedding model (e.g. nomic-embed-text).
+    :return: Number of inserted chunks.
+    """
+    if not chunks:
+        return 0
+
+    init_db()
+
+    # Extract text contents
+    contents = [doc.page_content for doc in chunks]
+
+    # Generate embeddings via Ollama in batch
+    embeddings = get_embedding(contents, model=model_name, is_query=False)
+
+    # Format vector into pgvector string format '[0.1,0.2,...]'
+    records = []
+    for idx, (doc, emb) in enumerate(zip(chunks, embeddings)):
+        meta = doc.metadata.copy() if hasattr(doc, "metadata") and doc.metadata else {}
+        meta_json = json.dumps(meta)
+        emb_str = f"[{','.join(str(val) for val in emb)}]"
+        records.append((doc_id, file_name, idx, doc.page_content, meta_json, emb_str))
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            insert_query = f"""
+                INSERT INTO {PG_TABLE_NAME} 
+                (doc_id, file_name, chunk_index, content, metadata, embedding)
+                VALUES %s;
+            """
+            execute_values(cur, insert_query, records, template="(%s, %s, %s, %s, %s, %s::vector)")
+        conn.commit()
+        return len(records)
+    finally:
+        conn.close()
+
+
+def similarity_search(
+    query: str, 
+    k: int = 5, 
+    file_name_filter: Optional[str] = None,
+    model_name: str = DEFAULT_EMBEDDING_MODEL
+) -> List[Dict[str, Any]]:
+    """
+    Computes query vector with Ollama and retrieves the top-K most similar chunks from pgvector.
+    Uses cosine distance operator '<=>'.
+    
+    :param query: User query text.
+    :param k: Top K chunks to retrieve.
+    :param file_name_filter: Optional filter by specific file_name.
+    :param model_name: Embedding model name.
+    :return: List of dicts with content, metadata, and distance_score.
+    """
+    init_db()
+
+    # 1. Embed user query using search_query prefix
+    query_vector = get_embedding(query, model=model_name, is_query=True)
+    query_vector_str = f"[{','.join(str(val) for val in query_vector)}]"
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if file_name_filter:
+                sql = f"""
+                    SELECT id, doc_id, file_name, chunk_index, content, metadata,
+                           (embedding <=> %s::vector) AS distance_score
+                    FROM {PG_TABLE_NAME}
+                    WHERE file_name = %s
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s;
+                """
+                cur.execute(sql, (query_vector_str, file_name_filter, query_vector_str, k))
+            else:
+                sql = f"""
+                    SELECT id, doc_id, file_name, chunk_index, content, metadata,
+                           (embedding <=> %s::vector) AS distance_score
+                    FROM {PG_TABLE_NAME}
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s;
+                """
+                cur.execute(sql, (query_vector_str, query_vector_str, k))
+
+            rows = cur.fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "content": row["content"],
+                "metadata": row["metadata"] or {},
+                "distance_score": round(float(row["distance_score"]), 4)
+            })
+        return results
+    finally:
+        conn.close()
+
+
+def list_documents() -> List[Dict[str, Any]]:
+    """
+    Returns a distinct list of all ingested documents along with chunk counts.
+    """
+    init_db()
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(f"""
+                SELECT doc_id, file_name, COUNT(*) AS chunk_count, MIN(created_at) AS created_at
+                FROM {PG_TABLE_NAME}
+                GROUP BY doc_id, file_name
+                ORDER BY created_at DESC;
+            """)
+            rows = cur.fetchall()
+            return [
+                {
+                    "doc_id": r["doc_id"],
+                    "file_name": r["file_name"],
+                    "chunk_count": int(r["chunk_count"])
+                }
+                for r in rows
+            ]
+    finally:
+        conn.close()
+
+
+def delete_document_by_id(doc_id: str) -> int:
+    """
+    Deletes all chunks associated with doc_id from pgvector.
+    """
+    init_db()
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"DELETE FROM {PG_TABLE_NAME} WHERE doc_id = %s;", (doc_id,))
+            deleted_count = cur.rowcount
+        conn.commit()
+        return deleted_count
+    finally:
+        conn.close()
+
+
+# Background task status helpers
 def set_task_status(task_id: str, status: str, details: Optional[Dict[str, Any]] = None):
     _background_tasks_db[task_id] = {
         "status": status,
         "details": details or {},
     }
 
+
 def get_task_status(task_id: str) -> Optional[Dict[str, Any]]:
     return _background_tasks_db.get(task_id)
 
-def list_documents() -> List[Dict[str, Any]]:
-    vs = get_vector_store()
-    raw_data = vs.get()
-    metadatas = raw_data.get("metadatas", [])
 
-    docs_map: Dict[str, Dict[str, Any]] = {}
-    for meta in metadatas:
-        if not meta:
-            continue
-        doc_id = meta.get("doc_id", "unknown")
-        if doc_id not in docs_map:
-            docs_map[doc_id] = {
-                "doc_id": doc_id,
-                "file_name": meta.get("file_name", "Unknown"),
-                "chunk_count": 0
-            }
-        docs_map[doc_id]["chunk_count"] += 1
+# Legacy Compatibility Wrapper
+class PgVectorStoreWrapper:
+    def add_documents(self, documents: List[Any]):
+        if not documents:
+            return
+        doc_id = documents[0].metadata.get("doc_id", "legacy_doc")
+        file_name = documents[0].metadata.get("file_name", "legacy_file.txt")
+        return add_document_chunks(documents, doc_id=doc_id, file_name=file_name)
 
-    return list(docs_map.values())
+    def similarity_search(self, query: str, k: int = 3):
+        results = similarity_search(query, k=k)
+        # Mock LangChain Document interface for backwards compatibility
+        class SimpleDoc:
+            def __init__(self, content, metadata):
+                self.page_content = content
+                self.metadata = metadata
+        return [SimpleDoc(r["content"], r["metadata"]) for r in results]
 
-def delete_document_by_id(doc_id: str) -> int:
-    vs = get_vector_store()
-    raw_data = vs.get(where={"doc_id": doc_id})
-    ids_to_delete = raw_data.get("ids", [])
-    if ids_to_delete:
-        vs.delete(ids=ids_to_delete)
-    return len(ids_to_delete)
+
+def get_vector_store() -> PgVectorStoreWrapper:
+    return PgVectorStoreWrapper()

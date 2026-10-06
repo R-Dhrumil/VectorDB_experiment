@@ -7,6 +7,7 @@ const API_BASE = "http://localhost:8000/documents";
 function App() {
   const [mode, setMode] = useState('upload'); // 'upload' or 'ask'
   const [chunking, setChunking] = useState('recursive');
+  const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
   const [topK, setTopK] = useState(5);
   const [file, setFile] = useState(null);
   const [question, setQuestion] = useState('');
@@ -54,6 +55,7 @@ function App() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('strategy', chunking);
+      formData.append('embedding_model', embeddingModel);
       
       const response = await fetch(`${API_BASE}/upload`, {
         method: 'POST',
@@ -64,7 +66,7 @@ function App() {
       if (!response.ok) throw new Error(data.detail || "Upload failed");
       
       setResult({ 
-        html: `✅ Success!<br><br>Message: ${data.message}<br>Task ID: ${data.task_id}<br>Doc ID: ${data.doc_id}<br><br>The backend is now processing and chunking this file in the background. You can switch to "Ask Question" to test it!`, 
+        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Task ID:</strong> ${data.task_id}<br><strong>Doc ID:</strong> ${data.doc_id}<br><strong>Model:</strong> <code>${data.embedding_model || embeddingModel}</code><br><br>The backend is extracting, chunking, and saving vectors to <strong>PostgreSQL (pgvector)</strong> in the background. Switch to "Ask Question" to test similarity retrieval!`, 
         type: 'success' 
       });
     } catch (error) {
@@ -87,7 +89,11 @@ function App() {
       const response = await fetch(`${API_BASE}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: question, top_k: topK })
+        body: JSON.stringify({ 
+          query: question, 
+          top_k: topK,
+          embedding_model: embeddingModel
+        })
       });
       
       const data = await response.json();
@@ -96,7 +102,7 @@ function App() {
       const formattedAnswer = data.answer.replace(/\n/g, '<br>');
       
       setResult({ 
-        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Context Chunks: ${data.context_chunks_used}</small>`, 
+        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Chunks: ${data.context_chunks_used} &bull; Vector DB: PostgreSQL (pgvector) &bull; Embedding: <code>${data.embedding_model || embeddingModel}</code></small>`, 
         type: '' 
       });
     } catch (error) {
@@ -117,6 +123,11 @@ function App() {
         <header>
           <h1>RAG Vector DB</h1>
           <p>Upload a document to ingest, or type a question to ask the LLM.</p>
+          <div className="system-badge">
+            <span className="badge-item">🗄️ PostgreSQL (pgvector)</span>
+            <span className="badge-dot">•</span>
+            <span className="badge-item">🧠 {embeddingModel}</span>
+          </div>
         </header>
 
         <section className="input-section">
@@ -173,7 +184,7 @@ function App() {
 
         {mode === 'upload' && (
           <section className="options-section">
-            <label>Chunking types</label>
+            <label>Chunking Strategy</label>
             <div className="pill-group">
               {['recursive', 'fixed', 'sentence', 'paragraph'].map(type => (
                 <button 
@@ -190,7 +201,27 @@ function App() {
         )}
 
         <section className="options-section">
-          <label>Vector DB Algorithm (HNSW) / Top K</label>
+          <label>Embedding Model (Ollama Local)</label>
+          <div className="pill-group">
+            {[
+              { id: 'nomic-embed-text', label: 'nomic-embed-text (768-d)' },
+              { id: 'mxbai-embed-large', label: 'mxbai-embed-large (1024-d)' },
+              { id: 'all-minilm', label: 'all-minilm (384-d)' }
+            ].map(m => (
+              <button 
+                key={m.id}
+                type="button" 
+                className={`pill ${embeddingModel === m.id ? 'active' : ''}`}
+                onClick={() => setEmbeddingModel(m.id)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="options-section">
+          <label>Vector DB Algorithm (HNSW Cosine) / Top K</label>
           <div className="pill-group">
             {[1, 3, 5, 10].map(k => (
               <button 

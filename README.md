@@ -1,6 +1,6 @@
-# VectorDB & RAG Document Processor
+# VectorDB & RAG Document Processor (pgvector + Ollama)
 
-A modular FastAPI backend and React frontend for extracting, chunking, embedding, and interacting with multi-format documents (`PDF`, `DOCX`, `XLSX`, `CSV`, `TXT`, `MD`) using a local vector database (`ChromaDB`) and Google Gemini LLM.
+A modular FastAPI backend and React frontend for extracting, chunking, embedding, and interacting with multi-format documents (`PDF`, `DOCX`, `XLSX`, `CSV`, `TXT`, `MD`) using **PostgreSQL (`pgvector`)**, **Ollama (`nomic-embed-text`)**, and Google Gemini LLM.
 
 ---
 
@@ -12,10 +12,11 @@ VectorDB_experiment/
 │   ├── app/                      # Main Modular Application
 │   │   ├── api/                  # REST API Router Endpoints
 │   │   ├── core/                 # App Settings & Configurations
-│   │   ├── database/             # Vector Store & Embedding Manager
+│   │   ├── database/             # PostgreSQL pgvector & Ollama Embeddings
 │   │   ├── extractors/           # Multi-Format Text Readers
 │   │   └── processing/           # Text Sanitization, Chunking & LLM Gen
 │   ├── .env.example              # Sample Environment Setup
+│   ├── requirements.txt          # Python Dependencies
 │   └── main.py                   # FastAPI Application Entrypoint
 ├── FE/                           # Frontend Application Root (React + Vite)
 │   ├── src/                      # React Components and CSS
@@ -26,32 +27,60 @@ VectorDB_experiment/
 
 ---
 
+## 🛠️ Prerequisites
+
+1. **PostgreSQL with `pgvector` Extension**
+   - Ensure PostgreSQL is running.
+   - Run in pgAdmin or psql:
+     ```sql
+     CREATE EXTENSION IF NOT EXISTS vector;
+     ```
+2. **Ollama (for Local Embeddings)**
+   - Start Ollama:
+     ```bash
+     ollama serve
+     ```
+   - Pull the `nomic-embed-text` embedding model:
+     ```bash
+     ollama pull nomic-embed-text
+     ```
+
+---
+
 ## 🚀 Quick Start (Backend)
 
 ### 1. Create and Activate Virtual Environment
-```powershell
+```bash
 cd BE
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+python3 -m venv venv
+source venv/bin/activate
 ```
 
 ### 2. Install Dependencies
-```powershell
+```bash
 pip install -r requirements.txt
 ```
 
 ### 3. Setup Environment Variables
-Before running the backend, you need to provide your Gemini API key.
-1. Copy the `.env.example` file and rename it to `.env` inside the `BE` folder.
-2. Open `BE/.env` and paste your actual Gemini API Key:
-```text
-GEMINI_API_KEY=your_google_gemini_api_key_here
-```
+1. Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+2. Configure your database credentials and Gemini API Key in `BE/.env`:
+   ```env
+   GEMINI_API_KEY=your_google_gemini_api_key_here
+   POSTGRES_HOST=localhost
+   POSTGRES_PORT=5432
+   POSTGRES_DB=postgres
+   POSTGRES_USER=postgres
+   POSTGRES_PASSWORD=postgres
+   OLLAMA_BASE_URL=http://localhost:11434
+   EMBEDDING_MODEL=nomic-embed-text
+   ```
 
-### 4. Start Development Server (Backend)
-To start the backend server, run the following command from inside the `BE` folder:
-```powershell
-.\venv\Scripts\python.exe -m uvicorn main:app --reload --port 8000
+### 4. Start Backend Server
+```bash
+uvicorn main:app --reload --port 8000
 ```
 Interactive API documentation will be available at: **`http://localhost:8000/docs`**
 
@@ -59,14 +88,12 @@ Interactive API documentation will be available at: **`http://localhost:8000/doc
 
 ## 🎨 Quick Start (Frontend)
 
-To run the React application for uploading documents and asking questions:
-
-```powershell
+```bash
 cd FE
 npm install
 npm run dev
 ```
-The application will launch on your local network, usually at: **`http://localhost:5173/`**
+The application will launch at **`http://localhost:5173/`**.
 
 ---
 
@@ -74,8 +101,8 @@ The application will launch on your local network, usually at: **`http://localho
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/documents/upload` | Upload PDF, DOCX, XLSX, or TXT file for background chunking & embedding |
-| `POST` | `/documents/ask` | Ask a question about ingested documents (uses RAG + Gemini) |
+| `POST` | `/documents/upload` | Upload file for background chunking, Ollama embedding & pgvector storage |
+| `POST` | `/documents/ask` | Ask a question about ingested documents (uses pgvector + Gemini) |
 | `POST` | `/documents/query` | Vector similarity search query across stored document chunks |
 | `GET` | `/documents/tasks/{task_id}` | Check async file ingestion job progress |
 | `GET` | `/documents` | List all ingested documents and chunk counts |
