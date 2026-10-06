@@ -1,0 +1,8 @@
+{
+  "venvPath": "BE",
+  "venv": "venv",
+  "extraPaths": [
+    "BE",
+    "BE/venv/Lib/site-packages"
+  ]
+}
