@@ -17,7 +17,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState({ html: '<div class="placeholder">Waiting for input...</div>', type: '' });
   const [dragActive, setDragActive] = useState(false);
-  
+
   const fileInputRef = useRef(null);
 
   const handleDrag = (e) => {
@@ -53,24 +53,24 @@ function App() {
 
     setIsLoading(true);
     setResult({ html: '<div class="placeholder">Processing request...</div>', type: '' });
-    
+
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('strategy', chunking);
       formData.append('embedding_model', embeddingModel);
-      
+
       const response = await fetch(`${API_BASE}/upload`, {
         method: 'POST',
         body: formData
       });
-      
+
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Upload failed");
-      
-      setResult({ 
-        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Task ID:</strong> ${data.task_id}<br><strong>Doc ID:</strong> ${data.doc_id}<br><strong>Model:</strong> <code>${data.embedding_model || embeddingModel}</code><br><br>The backend is extracting, chunking, and saving vectors to <strong>PostgreSQL (pgvector)</strong> in the background. Switch to "Ask Question" to test similarity retrieval!`, 
-        type: 'success' 
+
+      setResult({
+        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Task ID:</strong> ${data.task_id}<br><strong>Doc ID:</strong> ${data.doc_id}<br><strong>Model:</strong> <code>${data.embedding_model || embeddingModel}</code><br><br>The backend is extracting, chunking, and saving vectors to <strong>PostgreSQL (pgvector)</strong> in the background. Switch to "Ask Question" to test similarity retrieval!`,
+        type: 'success'
       });
     } catch (error) {
       setResult({ html: `Error: ${error.message}`, type: "error" });
@@ -87,25 +87,25 @@ function App() {
 
     setIsLoading(true);
     setResult({ html: '<div class="placeholder">Chunking and embedding paragraph in PostgreSQL...</div>', type: '' });
-    
+
     try {
       const response = await fetch(`${API_BASE}/raw`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           text: paragraphText,
           title: paragraphTitle.trim() || undefined,
           strategy: chunking,
           embedding_model: embeddingModel
         })
       });
-      
+
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Ingestion failed");
-      
-      setResult({ 
-        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Title/Snippet:</strong> <code>${data.title}</code><br><strong>Doc ID:</strong> <code>${data.doc_id}</code><br><strong>Chunks Created:</strong> ${data.chunks_created}<br><strong>Strategy:</strong> <code>${data.strategy}</code><br><strong>Model:</strong> <code>${data.embedding_model}</code><br><br>Paragraph is saved! Switch to <strong>"Ask Question"</strong> to run similarity queries against it.`, 
-        type: 'success' 
+
+      setResult({
+        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Title/Snippet:</strong> <code>${data.title}</code><br><strong>Doc ID:</strong> <code>${data.doc_id}</code><br><strong>Chunks Created:</strong> ${data.chunks_created}<br><strong>Strategy:</strong> <code>${data.strategy}</code><br><strong>Model:</strong> <code>${data.embedding_model}</code><br><br>Paragraph is saved! Switch to <strong>"Ask Question"</strong> to run similarity queries against it.`,
+        type: 'success'
       });
     } catch (error) {
       setResult({ html: `Error: ${error.message}`, type: "error" });
@@ -122,27 +122,27 @@ function App() {
 
     setIsLoading(true);
     setResult({ html: '<div class="placeholder">Processing request...</div>', type: '' });
-    
+
     try {
       const response = await fetch(`${API_BASE}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          query: question, 
+        body: JSON.stringify({
+          query: question,
           top_k: topK,
           embedding_model: embeddingModel,
           distance_metric: distanceMetric
         })
       });
-      
+
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Query failed");
-      
+
       const formattedAnswer = data.answer.replace(/\n/g, '<br>');
-      
-      setResult({ 
-        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Chunks: ${data.context_chunks_used} &bull; Metric: <code>${data.distance_metric || distanceMetric}</code> &bull; Embedding: <code>${data.embedding_model || embeddingModel}</code></small>`, 
-        type: '' 
+
+      setResult({
+        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Chunks: ${data.context_chunks_used} &bull; Metric: <code>${data.distance_metric || distanceMetric}</code> &bull; Embedding: <code>${data.embedding_model || embeddingModel}</code></small>`,
+        type: ''
       });
     } catch (error) {
       setResult({ html: `Error: ${error.message}`, type: "error" });
@@ -175,32 +175,32 @@ function App() {
 
         <section className="input-section">
           <div className="mode-toggle">
-            <button 
-              type="button" 
-              className={`mode-btn ${mode === 'upload' ? 'active' : ''}`} 
+            <button
+              type="button"
+              className={`mode-btn ${mode === 'upload' ? 'active' : ''}`}
               onClick={() => { setMode('upload'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
             >
               Upload File
             </button>
-            <button 
-              type="button" 
-              className={`mode-btn ${mode === 'paste' ? 'active' : ''}`} 
+            <button
+              type="button"
+              className={`mode-btn ${mode === 'paste' ? 'active' : ''}`}
               onClick={() => { setMode('paste'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
             >
               Paste Paragraph
             </button>
-            <button 
-              type="button" 
-              className={`mode-btn ${mode === 'ask' ? 'active' : ''}`} 
+            <button
+              type="button"
+              className={`mode-btn ${mode === 'ask' ? 'active' : ''}`}
               onClick={() => { setMode('ask'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
             >
               Ask Question
             </button>
           </div>
-          
+
           <div className="input-zones">
             {mode === 'upload' && (
-              <div 
+              <div
                 className={`dropzone ${dragActive ? 'dragover' : ''}`}
                 onDragEnter={handleDrag}
                 onDragLeave={handleDrag}
@@ -211,10 +211,10 @@ function App() {
                 <UploadCloud className="drop-icon" size={40} />
                 <p className="drop-text">Drag & drop a file here, or click to browse</p>
                 <p className="supported-formats">Supports PDF, DOCX, XLSX, TXT, MD</p>
-                <input 
-                  type="file" 
+                <input
+                  type="file"
                   ref={fileInputRef}
-                  className="hidden-input" 
+                  className="hidden-input"
                   accept=".pdf,.docx,.xlsx,.txt,.csv,.md"
                   onChange={handleFileChange}
                 />
@@ -224,14 +224,14 @@ function App() {
 
             {mode === 'paste' && (
               <div className="textzone">
-                <input 
-                  type="text" 
-                  className="title-input" 
+                <input
+                  type="text"
+                  className="title-input"
                   placeholder="Optional title / label (e.g. Return Policy, Article Excerpt)"
                   value={paragraphTitle}
                   onChange={(e) => setParagraphTitle(e.target.value)}
                 />
-                <textarea 
+                <textarea
                   placeholder="Paste any article, paragraph, or raw document text here directly..."
                   value={paragraphText}
                   onChange={(e) => setParagraphText(e.target.value)}
@@ -241,7 +241,7 @@ function App() {
 
             {mode === 'ask' && (
               <div className="textzone">
-                <textarea 
+                <textarea
                   placeholder="e.g., What are the main points? Ask any conceptual question..."
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
@@ -256,9 +256,9 @@ function App() {
             <label>Chunking Strategy</label>
             <div className="pill-group">
               {['recursive', 'fixed', 'sentence', 'paragraph'].map(type => (
-                <button 
+                <button
                   key={type}
-                  type="button" 
+                  type="button"
                   className={`pill ${chunking === type ? 'active' : ''}`}
                   onClick={() => setChunking(type)}
                 >
@@ -274,12 +274,11 @@ function App() {
           <div className="pill-group">
             {[
               { id: 'nomic-embed-text', label: 'nomic-embed-text (768-d)' },
-              { id: 'mxbai-embed-large', label: 'mxbai-embed-large (1024-d)' },
-              { id: 'all-minilm', label: 'all-minilm (384-d)' }
+
             ].map(m => (
-              <button 
+              <button
                 key={m.id}
-                type="button" 
+                type="button"
                 className={`pill ${embeddingModel === m.id ? 'active' : ''}`}
                 onClick={() => setEmbeddingModel(m.id)}
               >
@@ -299,9 +298,9 @@ function App() {
                   { id: 'l2', label: 'Euclidean / L2 (<->)' },
                   { id: 'inner_product', label: 'Inner Product (<#>)' }
                 ].map(m => (
-                  <button 
+                  <button
                     key={m.id}
-                    type="button" 
+                    type="button"
                     className={`pill ${distanceMetric === m.id ? 'active' : ''}`}
                     onClick={() => setDistanceMetric(m.id)}
                   >
@@ -315,9 +314,9 @@ function App() {
               <label>Top K Results to Retrieve</label>
               <div className="pill-group">
                 {[1, 3, 5, 10].map(k => (
-                  <button 
+                  <button
                     key={k}
-                    type="button" 
+                    type="button"
                     className={`pill ${topK === k ? 'active' : ''}`}
                     onClick={() => setTopK(k)}
                   >
@@ -330,9 +329,9 @@ function App() {
         )}
 
         <section className="submit-section">
-          <button 
-            type="button" 
-            className="primary-btn" 
+          <button
+            type="button"
+            className="primary-btn"
             onClick={handleSubmit}
             disabled={isLoading}
           >
@@ -348,8 +347,8 @@ function App() {
 
         <section className="result-section">
           <label>Result</label>
-          <div 
-            className={`result-box ${result.type}`} 
+          <div
+            className={`result-box ${result.type}`}
             dangerouslySetInnerHTML={{ __html: result.html }}
           ></div>
         </section>
