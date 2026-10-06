@@ -5,12 +5,14 @@ import './index.css';
 const API_BASE = "http://localhost:8000/documents";
 
 function App() {
-  const [mode, setMode] = useState('upload'); // 'upload' or 'ask'
+  const [mode, setMode] = useState('upload'); // 'upload', 'paste', or 'ask'
   const [chunking, setChunking] = useState('recursive');
   const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
   const [distanceMetric, setDistanceMetric] = useState('cosine');
   const [topK, setTopK] = useState(5);
   const [file, setFile] = useState(null);
+  const [paragraphText, setParagraphText] = useState('');
+  const [paragraphTitle, setParagraphTitle] = useState('');
   const [question, setQuestion] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState({ html: '<div class="placeholder">Waiting for input...</div>', type: '' });
@@ -77,6 +79,41 @@ function App() {
     }
   };
 
+  const handlePasteIngest = async () => {
+    if (!paragraphText.trim()) {
+      setResult({ html: "Please enter or paste a paragraph first.", type: "error" });
+      return;
+    }
+
+    setIsLoading(true);
+    setResult({ html: '<div class="placeholder">Chunking and embedding paragraph in PostgreSQL...</div>', type: '' });
+    
+    try {
+      const response = await fetch(`${API_BASE}/raw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          text: paragraphText,
+          title: paragraphTitle.trim() || undefined,
+          strategy: chunking,
+          embedding_model: embeddingModel
+        })
+      });
+      
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Ingestion failed");
+      
+      setResult({ 
+        html: `✅ <strong>Success!</strong><br><br><strong>Message:</strong> ${data.message}<br><strong>Title/Snippet:</strong> <code>${data.title}</code><br><strong>Doc ID:</strong> <code>${data.doc_id}</code><br><strong>Chunks Created:</strong> ${data.chunks_created}<br><strong>Strategy:</strong> <code>${data.strategy}</code><br><strong>Model:</strong> <code>${data.embedding_model}</code><br><br>Paragraph is saved! Switch to <strong>"Ask Question"</strong> to run similarity queries against it.`, 
+        type: 'success' 
+      });
+    } catch (error) {
+      setResult({ html: `Error: ${error.message}`, type: "error" });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleAsk = async () => {
     if (!question.trim()) {
       setResult({ html: "Please type a question.", type: "error" });
@@ -116,8 +153,10 @@ function App() {
 
   const handleSubmit = () => {
     if (mode === 'upload') handleUpload();
+    else if (mode === 'paste') handlePasteIngest();
     else handleAsk();
   };
+
 
   return (
     <div className="app-container">
@@ -145,6 +184,13 @@ function App() {
             </button>
             <button 
               type="button" 
+              className={`mode-btn ${mode === 'paste' ? 'active' : ''}`} 
+              onClick={() => { setMode('paste'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
+            >
+              Paste Paragraph
+            </button>
+            <button 
+              type="button" 
               className={`mode-btn ${mode === 'ask' ? 'active' : ''}`} 
               onClick={() => { setMode('ask'); setResult({ html: '<div class="placeholder">Waiting for input...</div>', type: '' }); }}
             >
@@ -153,7 +199,7 @@ function App() {
           </div>
           
           <div className="input-zones">
-            {mode === 'upload' ? (
+            {mode === 'upload' && (
               <div 
                 className={`dropzone ${dragActive ? 'dragover' : ''}`}
                 onDragEnter={handleDrag}
@@ -174,10 +220,29 @@ function App() {
                 />
                 {file && <div className="file-name-display">Selected: {file.name}</div>}
               </div>
-            ) : (
+            )}
+
+            {mode === 'paste' && (
+              <div className="textzone">
+                <input 
+                  type="text" 
+                  className="title-input" 
+                  placeholder="Optional title / label (e.g. Return Policy, Article Excerpt)"
+                  value={paragraphTitle}
+                  onChange={(e) => setParagraphTitle(e.target.value)}
+                />
+                <textarea 
+                  placeholder="Paste any article, paragraph, or raw document text here directly..."
+                  value={paragraphText}
+                  onChange={(e) => setParagraphText(e.target.value)}
+                ></textarea>
+              </div>
+            )}
+
+            {mode === 'ask' && (
               <div className="textzone">
                 <textarea 
-                  placeholder="e.g., Summarize the uploaded document..."
+                  placeholder="e.g., What are the main points? Ask any conceptual question..."
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
                 ></textarea>
@@ -186,7 +251,7 @@ function App() {
           </div>
         </section>
 
-        {mode === 'upload' && (
+        {(mode === 'upload' || mode === 'paste') && (
           <section className="options-section">
             <label>Chunking Strategy</label>
             <div className="pill-group">
@@ -224,41 +289,45 @@ function App() {
           </div>
         </section>
 
-        <section className="options-section">
-          <label>Distance Formula (pgvector Metric)</label>
-          <div className="pill-group">
-            {[
-              { id: 'cosine', label: 'Cosine (<=>)' },
-              { id: 'l2', label: 'Euclidean / L2 (<->)' },
-              { id: 'inner_product', label: 'Inner Product (<#>)' }
-            ].map(m => (
-              <button 
-                key={m.id}
-                type="button" 
-                className={`pill ${distanceMetric === m.id ? 'active' : ''}`}
-                onClick={() => setDistanceMetric(m.id)}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </section>
+        {mode === 'ask' && (
+          <>
+            <section className="options-section">
+              <label>Distance Formula (pgvector Metric)</label>
+              <div className="pill-group">
+                {[
+                  { id: 'cosine', label: 'Cosine (<=>)' },
+                  { id: 'l2', label: 'Euclidean / L2 (<->)' },
+                  { id: 'inner_product', label: 'Inner Product (<#>)' }
+                ].map(m => (
+                  <button 
+                    key={m.id}
+                    type="button" 
+                    className={`pill ${distanceMetric === m.id ? 'active' : ''}`}
+                    onClick={() => setDistanceMetric(m.id)}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </section>
 
-        <section className="options-section">
-          <label>Top K Results to Retrieve</label>
-          <div className="pill-group">
-            {[1, 3, 5, 10].map(k => (
-              <button 
-                key={k}
-                type="button" 
-                className={`pill ${topK === k ? 'active' : ''}`}
-                onClick={() => setTopK(k)}
-              >
-                Top {k}
-              </button>
-            ))}
-          </div>
-        </section>
+            <section className="options-section">
+              <label>Top K Results to Retrieve</label>
+              <div className="pill-group">
+                {[1, 3, 5, 10].map(k => (
+                  <button 
+                    key={k}
+                    type="button" 
+                    className={`pill ${topK === k ? 'active' : ''}`}
+                    onClick={() => setTopK(k)}
+                  >
+                    Top {k}
+                  </button>
+                ))}
+              </div>
+            </section>
+          </>
+        )}
 
         <section className="submit-section">
           <button 
@@ -267,7 +336,13 @@ function App() {
             onClick={handleSubmit}
             disabled={isLoading}
           >
-            {isLoading ? <div className="spinner"></div> : <span className="btn-text">Submit</span>}
+            {isLoading ? (
+              <div className="spinner"></div>
+            ) : (
+              <span className="btn-text">
+                {mode === 'upload' ? 'Upload & Ingest File' : mode === 'paste' ? 'Ingest Paragraph' : 'Ask Question'}
+              </span>
+            )}
           </button>
         </section>
 

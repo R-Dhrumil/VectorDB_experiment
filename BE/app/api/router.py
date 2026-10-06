@@ -35,12 +35,22 @@ class QueryRequest(BaseModel):
     distance_metric: str = Field(default="cosine", description="Distance formula: cosine (<=>), l2 (<->), inner_product (<#>)")
 
 
+class IngestTextRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="Raw text or paragraph to ingest")
+    title: Optional[str] = Field(default=None, description="Optional label or title for the text snippet")
+    strategy: str = Field(default="recursive", description="Chunking strategy: recursive, fixed, sentence, paragraph")
+    chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, ge=50, le=5000)
+    chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0, le=1000)
+    embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, description="Ollama embedding model to use")
+
+
 class AskRequest(BaseModel):
     query: str = Field(..., description="User question to be answered by the LLM")
     top_k: int = Field(default=5, ge=1, le=20, description="Number of context chunks to retrieve")
     file_name_filter: Optional[str] = Field(default=None, description="Optional filter by specific filename")
     embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, description="Ollama embedding model to use")
     distance_metric: str = Field(default="cosine", description="Distance formula: cosine (<=>), l2 (<->), inner_product (<#>)")
+
 
 
 
@@ -151,6 +161,55 @@ async def upload_document(
         "filename": safe_filename,
         "embedding_model": embedding_model
     }
+
+
+@router.post("/raw")
+def ingest_raw_paragraph(request: IngestTextRequest):
+    """
+    Directly ingest and embed raw text or paragraph without requiring a file upload.
+    """
+    clean_snippet = request.text.strip()
+    if not clean_snippet:
+        raise HTTPException(status_code=400, detail="Text content cannot be empty.")
+
+    text_hash = hashlib.sha256(clean_snippet.encode("utf-8")).hexdigest()
+    doc_id = f"snippet_{text_hash[:10]}"
+    display_title = (request.title.strip() if request.title else "") or f"paragraph_{text_hash[:6]}.txt"
+
+    try:
+        blocks = [{"text": clean_snippet, "metadata": {"source": "direct_input", "title": display_title}}]
+        chunks = chunk_document_blocks(
+            blocks=blocks,
+            doc_id=doc_id,
+            file_name=display_title,
+            strategy=request.strategy,
+            chunk_size=request.chunk_size,
+            chunk_overlap=request.chunk_overlap
+        )
+
+        if not chunks:
+            raise HTTPException(status_code=400, detail="Could not generate any chunks from the provided text.")
+
+        inserted_count = add_document_chunks(
+            chunks=chunks,
+            doc_id=doc_id,
+            file_name=display_title,
+            model_name=request.embedding_model
+        )
+
+        return {
+            "message": "Paragraph successfully chunked, embedded, and stored in PostgreSQL (pgvector).",
+            "doc_id": doc_id,
+            "title": display_title,
+            "chunks_created": inserted_count,
+            "strategy": request.strategy,
+            "embedding_model": request.embedding_model
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingestion Error: {str(e)}")
+
 
 
 @router.get("/tasks/{task_id}")
