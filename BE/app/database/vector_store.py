@@ -59,10 +59,18 @@ def init_db():
                 );
             """)
 
-            # 3. Create HNSW vector index using cosine distance
+            # 3. Create HNSW vector indexes for supported distance metrics
             cur.execute(f"""
                 CREATE INDEX IF NOT EXISTS {PG_TABLE_NAME}_embedding_hnsw_idx 
                 ON {PG_TABLE_NAME} USING hnsw (embedding vector_cosine_ops);
+            """)
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {PG_TABLE_NAME}_embedding_hnsw_l2_idx 
+                ON {PG_TABLE_NAME} USING hnsw (embedding vector_l2_ops);
+            """)
+            cur.execute(f"""
+                CREATE INDEX IF NOT EXISTS {PG_TABLE_NAME}_embedding_hnsw_ip_idx 
+                ON {PG_TABLE_NAME} USING hnsw (embedding vector_ip_ops);
             """)
 
             # 4. Create standard indexes for filtering and deletions
@@ -129,23 +137,49 @@ def add_document_chunks(
         conn.close()
 
 
+SUPPORTED_METRICS = {
+    "cosine": {"operator": "<=>", "name": "cosine"},
+    "l2": {"operator": "<->", "name": "l2"},
+    "euclidean": {"operator": "<->", "name": "l2"},
+    "inner_product": {"operator": "<#>", "name": "inner_product"},
+    "dot": {"operator": "<#>", "name": "inner_product"},
+    "ip": {"operator": "<#>", "name": "inner_product"}
+}
+
+
 def similarity_search(
     query: str, 
     k: int = 5, 
     file_name_filter: Optional[str] = None,
-    model_name: str = DEFAULT_EMBEDDING_MODEL
+    model_name: str = DEFAULT_EMBEDDING_MODEL,
+    distance_metric: str = "cosine"
 ) -> List[Dict[str, Any]]:
     """
     Computes query vector with Ollama and retrieves the top-K most similar chunks from pgvector.
-    Uses cosine distance operator '<=>'.
+    Supports selectable mathematical distance formulas:
+      - 'cosine': Cosine distance operator '<=>'
+      - 'l2' (or 'euclidean'): Euclidean distance operator '<->'
+      - 'inner_product' (or 'dot'): Inner product distance operator '<#>'
     
     :param query: User query text.
     :param k: Top K chunks to retrieve.
     :param file_name_filter: Optional filter by specific file_name.
     :param model_name: Embedding model name.
-    :return: List of dicts with content, metadata, and distance_score.
+    :param distance_metric: Distance metric formula ('cosine', 'l2', or 'inner_product').
+    :return: List of dicts with content, metadata, distance_score, and distance_metric.
     """
     init_db()
+
+    metric_key = (distance_metric or "cosine").lower().strip()
+    if metric_key not in SUPPORTED_METRICS:
+        raise ValueError(
+            f"Unsupported distance metric '{distance_metric}'. "
+            f"Allowed metrics: 'cosine', 'l2' (euclidean), 'inner_product' (dot)"
+        )
+
+    metric_info = SUPPORTED_METRICS[metric_key]
+    op = metric_info["operator"]
+    canonical_metric = metric_info["name"]
 
     # 1. Embed user query using search_query prefix
     query_vector = get_embedding(query, model=model_name, is_query=True)
@@ -157,19 +191,19 @@ def similarity_search(
             if file_name_filter:
                 sql = f"""
                     SELECT id, doc_id, file_name, chunk_index, content, metadata,
-                           (embedding <=> %s::vector) AS distance_score
+                           (embedding {op} %s::vector) AS distance_score
                     FROM {PG_TABLE_NAME}
                     WHERE file_name = %s
-                    ORDER BY embedding <=> %s::vector
+                    ORDER BY embedding {op} %s::vector
                     LIMIT %s;
                 """
                 cur.execute(sql, (query_vector_str, file_name_filter, query_vector_str, k))
             else:
                 sql = f"""
                     SELECT id, doc_id, file_name, chunk_index, content, metadata,
-                           (embedding <=> %s::vector) AS distance_score
+                           (embedding {op} %s::vector) AS distance_score
                     FROM {PG_TABLE_NAME}
-                    ORDER BY embedding <=> %s::vector
+                    ORDER BY embedding {op} %s::vector
                     LIMIT %s;
                 """
                 cur.execute(sql, (query_vector_str, query_vector_str, k))
@@ -181,7 +215,8 @@ def similarity_search(
             results.append({
                 "content": row["content"],
                 "metadata": row["metadata"] or {},
-                "distance_score": round(float(row["distance_score"]), 4)
+                "distance_score": round(float(row["distance_score"]), 4),
+                "distance_metric": canonical_metric
             })
         return results
     finally:

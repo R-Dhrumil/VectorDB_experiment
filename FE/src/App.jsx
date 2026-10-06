@@ -8,6 +8,7 @@ function App() {
   const [mode, setMode] = useState('upload'); // 'upload' or 'ask'
   const [chunking, setChunking] = useState('recursive');
   const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
+  const [distanceMetric, setDistanceMetric] = useState('cosine');
   const [topK, setTopK] = useState(5);
   const [file, setFile] = useState(null);
   const [question, setQuestion] = useState('');
@@ -92,7 +93,8 @@ function App() {
         body: JSON.stringify({ 
           query: question, 
           top_k: topK,
-          embedding_model: embeddingModel
+          embedding_model: embeddingModel,
+          distance_metric: distanceMetric
         })
       });
       
@@ -102,7 +104,7 @@ function App() {
       const formattedAnswer = data.answer.replace(/\n/g, '<br>');
       
       setResult({ 
-        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Chunks: ${data.context_chunks_used} &bull; Vector DB: PostgreSQL (pgvector) &bull; Embedding: <code>${data.embedding_model || embeddingModel}</code></small>`, 
+        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Chunks: ${data.context_chunks_used} &bull; Metric: <code>${data.distance_metric || distanceMetric}</code> &bull; Embedding: <code>${data.embedding_model || embeddingModel}</code></small>`, 
         type: '' 
       });
     } catch (error) {
@@ -127,6 +129,8 @@ function App() {
             <span className="badge-item">🗄️ PostgreSQL (pgvector)</span>
             <span className="badge-dot">•</span>
             <span className="badge-item">🧠 {embeddingModel}</span>
+            <span className="badge-dot">•</span>
+            <span className="badge-item">📐 {distanceMetric}</span>
           </div>
         </header>
 
@@ -221,7 +225,27 @@ function App() {
         </section>
 
         <section className="options-section">
-          <label>Vector DB Algorithm (HNSW Cosine) / Top K</label>
+          <label>Distance Formula (pgvector Metric)</label>
+          <div className="pill-group">
+            {[
+              { id: 'cosine', label: 'Cosine (<=>)' },
+              { id: 'l2', label: 'Euclidean / L2 (<->)' },
+              { id: 'inner_product', label: 'Inner Product (<#>)' }
+            ].map(m => (
+              <button 
+                key={m.id}
+                type="button" 
+                className={`pill ${distanceMetric === m.id ? 'active' : ''}`}
+                onClick={() => setDistanceMetric(m.id)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="options-section">
+          <label>Top K Results to Retrieve</label>
           <div className="pill-group">
             {[1, 3, 5, 10].map(k => (
               <button 

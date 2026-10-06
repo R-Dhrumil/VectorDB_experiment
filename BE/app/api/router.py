@@ -32,6 +32,7 @@ class QueryRequest(BaseModel):
     top_k: int = Field(default=3, ge=1, le=20, description="Number of top results to retrieve")
     file_name_filter: Optional[str] = Field(default=None, description="Optional filter by specific filename")
     embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, description="Ollama embedding model to use")
+    distance_metric: str = Field(default="cosine", description="Distance formula: cosine (<=>), l2 (<->), inner_product (<#>)")
 
 
 class AskRequest(BaseModel):
@@ -39,6 +40,8 @@ class AskRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20, description="Number of context chunks to retrieve")
     file_name_filter: Optional[str] = Field(default=None, description="Optional filter by specific filename")
     embedding_model: str = Field(default=DEFAULT_EMBEDDING_MODEL, description="Ollama embedding model to use")
+    distance_metric: str = Field(default="cosine", description="Distance formula: cosine (<=>), l2 (<->), inner_product (<#>)")
+
 
 
 # --- Background Worker Function ---
@@ -165,21 +168,26 @@ def get_task_progress(task_id: str):
 def query_documents(request: QueryRequest):
     """
     Searches PostgreSQL pgvector for chunks semantically similar to the query.
+    Supports distance_metric: 'cosine', 'l2', 'inner_product'.
     """
     try:
         results = similarity_search(
             query=request.query,
             k=request.top_k,
             file_name_filter=request.file_name_filter,
-            model_name=request.embedding_model
+            model_name=request.embedding_model,
+            distance_metric=request.distance_metric
         )
 
         return {
             "query": request.query,
             "embedding_model": request.embedding_model,
+            "distance_metric": request.distance_metric,
             "results_count": len(results),
             "results": results
         }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search Error: {str(e)}")
 
@@ -188,6 +196,7 @@ def query_documents(request: QueryRequest):
 def ask_question(request: AskRequest):
     """
     Searches pgvector using Ollama embeddings and uses Gemini LLM to generate an answer.
+    Supports distance_metric: 'cosine', 'l2', 'inner_product'.
     """
     try:
         # 1. Retrieve relevant chunks from pgvector
@@ -195,7 +204,8 @@ def ask_question(request: AskRequest):
             query=request.query,
             k=request.top_k,
             file_name_filter=request.file_name_filter,
-            model_name=request.embedding_model
+            model_name=request.embedding_model,
+            distance_metric=request.distance_metric
         )
 
         # 2. Generate answer with Gemini
@@ -204,10 +214,13 @@ def ask_question(request: AskRequest):
         return {
             "query": request.query,
             "embedding_model": request.embedding_model,
+            "distance_metric": request.distance_metric,
             "answer": answer,
             "context_chunks_used": len(results),
             "sources": results
         }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RAG Error: {str(e)}")
 

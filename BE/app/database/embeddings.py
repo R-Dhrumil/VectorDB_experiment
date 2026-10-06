@@ -1,6 +1,22 @@
 import httpx
-from typing import List, Union
+from typing import List, Union, overload
 from app.core.config import OLLAMA_BASE_URL, DEFAULT_EMBEDDING_MODEL
+
+
+@overload
+def get_embedding(
+    text: str, 
+    model: str = DEFAULT_EMBEDDING_MODEL, 
+    is_query: bool = False
+) -> List[float]: ...
+
+
+@overload
+def get_embedding(
+    text: List[str], 
+    model: str = DEFAULT_EMBEDDING_MODEL, 
+    is_query: bool = False
+) -> List[List[float]]: ...
 
 
 def get_embedding(
