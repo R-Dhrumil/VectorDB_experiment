@@ -27,6 +27,7 @@ EMBEDDING_DIMENSION = 768
 
 # LLM Config
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Chunking defaults
 DEFAULT_CHUNK_SIZE = 800

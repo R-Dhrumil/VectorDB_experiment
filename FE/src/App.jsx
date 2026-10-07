@@ -141,7 +141,7 @@ function App() {
       const formattedAnswer = data.answer.replace(/\n/g, '<br>');
 
       setAskResult({
-        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 1rem 0;"><small style="color: var(--text-secondary)">Retrieved Chunks: ${data.context_chunks_used} &bull; Metric: <code>${data.distance_metric || distanceMetric}</code> &bull; Embedding: <code>${data.embedding_model || embeddingModel}</code></small>`,
+        html: `<strong>Answer:</strong><br><div class="markdown-content">${formattedAnswer}</div><hr style="border: 0; border-top: 1px solid var(--card-border); margin: 0.75rem 0;"><small style="color: var(--text-secondary)">⚡ LLM Engine: <code>${data.llm_provider || 'Groq Cloud'}</code> &bull; Chunks: ${data.context_chunks_used} &bull; Metric: <code>${data.distance_metric || distanceMetric}</code></small>`,
         type: ''
       });
     } catch (error) {

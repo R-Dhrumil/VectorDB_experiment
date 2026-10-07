@@ -267,14 +267,15 @@ def ask_question(request: AskRequest):
             distance_metric=request.distance_metric
         )
 
-        # 2. Generate answer with Gemini
-        answer = generate_rag_answer(request.query, results)
+        # 2. Generate answer with LLM (Groq or Gemini)
+        llm_result = generate_rag_answer(request.query, results)
 
         return {
             "query": request.query,
             "embedding_model": request.embedding_model,
             "distance_metric": request.distance_metric,
-            "answer": answer,
+            "answer": llm_result["answer"],
+            "llm_provider": llm_result["provider"],
             "context_chunks_used": len(results),
             "sources": results
         }
