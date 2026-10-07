@@ -166,17 +166,18 @@ function App() {
           </div>
         </header>
 
-        {/* ================= STEP 1: INGESTION & CHUNKING ================= */}
-        <section className="step-section">
-          <div className="step-header">
-            <div className="step-title">
-              <span className="step-num">1</span>
-              <span>Document Ingestion & Chunking</span>
+        <div className="steps-grid">
+          {/* ================= STEP 1: INGESTION & CHUNKING ================= */}
+          <section className="step-card">
+            <div className="step-header">
+              <div className="step-title">
+                <span className="step-num">1</span>
+                <span>Document Ingestion & Chunking</span>
+              </div>
+              <span className={`step-status ${isIngested ? 'active' : ''}`}>
+                {isIngested ? '✓ Ready' : 'Pending Ingestion'}
+              </span>
             </div>
-            <span className={`step-status ${isIngested ? 'active' : ''}`}>
-              {isIngested ? '✓ Ready' : 'Pending Ingestion'}
-            </span>
-          </div>
 
           <div className="mode-toggle">
             <button
@@ -294,10 +295,8 @@ function App() {
           )}
         </section>
 
-        <hr className="section-divider" />
-
         {/* ================= STEP 2: ASK QUESTION & SEARCH ================= */}
-        <section className="step-section">
+        <section className="step-card">
           <div className="step-header">
             <div className="step-title">
               <span className="step-num">2</span>
@@ -404,8 +403,9 @@ function App() {
             </div>
           )}
         </section>
-      </main>
-    </div>
+      </div>
+    </main>
+  </div>
   );
 }
 
