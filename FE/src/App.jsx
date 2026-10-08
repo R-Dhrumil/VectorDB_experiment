@@ -43,12 +43,14 @@ function App() {
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       setFile(e.dataTransfer.files[0]);
+      setIngestFeedback(null);
     }
   };
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0]);
+      setIngestFeedback(null);
     }
   };
 
@@ -73,6 +75,11 @@ function App() {
         formData.append('strategy', chunking);
         formData.append('embedding_model', embeddingModel);
 
+        setIngestFeedback({
+          type: 'info',
+          message: `⏳ Uploading "${file.name}" to server...`
+        });
+
         const response = await fetch(`${API_BASE}/upload`, {
           method: 'POST',
           body: formData
@@ -81,12 +88,53 @@ function App() {
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || "Upload failed");
 
+        const taskId = data.task_id;
         setIngestFeedback({
-          type: 'success',
-          message: `✅ File "${data.filename}" accepted! Processing & embeddings are being saved to PostgreSQL (pgvector).`,
-          details: `Doc ID: ${data.doc_id} • Strategy: ${chunking}`
+          type: 'info',
+          message: `⏳ File accepted. Extracting text & preparing chunks...`
         });
-        setIsIngested(true);
+
+        // Poll task status every 1 second
+        let isDone = false;
+        let attempts = 0;
+        const maxAttempts = 180; // 3-minute safety limit
+
+        while (!isDone && attempts < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          attempts++;
+
+          try {
+            const pollRes = await fetch(`${API_BASE}/tasks/${taskId}`);
+            if (!pollRes.ok) continue;
+            const pollData = await pollRes.json();
+
+            if (pollData.status === 'PROCESSING') {
+              setIngestFeedback({
+                type: 'info',
+                message: `⏳ ${pollData.details?.message || "Processing document & embeddings in background..."}`
+              });
+            } else if (pollData.status === 'COMPLETED') {
+              isDone = true;
+              setIngestFeedback({
+                type: 'success',
+                message: `✅ File "${pollData.details?.filename || file.name}" processed successfully!`,
+                details: `Created ${pollData.details?.chunks_created} chunks • Strategy: ${pollData.details?.strategy || chunking} • Stored in PostgreSQL (pgvector)`
+              });
+              setIsIngested(true);
+            } else if (pollData.status === 'FAILED') {
+              isDone = true;
+              throw new Error(pollData.details?.error || "Document processing failed in background.");
+            }
+          } catch (pollErr) {
+            if (isDone) throw pollErr;
+            // Transient fetch error during poll, continue polling
+            console.warn("Poll attempt error:", pollErr);
+          }
+        }
+
+        if (!isDone) {
+          throw new Error("Document processing timed out after 3 minutes. Please check backend terminal.");
+        }
       } else {
         const response = await fetch(`${API_BASE}/raw`, {
           method: 'POST',
@@ -198,26 +246,60 @@ function App() {
 
           <div className="input-zones">
             {inputTab === 'upload' ? (
-              <div
-                className={`dropzone ${dragActive ? 'dragover' : ''}`}
-                onDragEnter={handleDrag}
-                onDragLeave={handleDrag}
-                onDragOver={handleDrag}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <UploadCloud className="drop-icon" size={36} />
-                <p className="drop-text">Drag & drop your file here, or click to browse</p>
-                <p className="supported-formats">Supports PDF, DOCX, XLSX, TXT, MD</p>
+              <>
                 <input
                   type="file"
                   ref={fileInputRef}
-                  className="hidden-input"
+                  style={{ display: 'none' }}
                   accept=".pdf,.docx,.xlsx,.txt,.csv,.md"
                   onChange={handleFileChange}
                 />
-                {file && <div className="file-name-display">Selected: {file.name}</div>}
-              </div>
+                <div
+                  className={`dropzone ${dragActive ? 'dragover' : ''}`}
+                  onDragEnter={handleDrag}
+                  onDragLeave={handleDrag}
+                  onDragOver={handleDrag}
+                  onDrop={(e) => {
+                    handleDrop(e);
+                    if (fileInputRef.current) fileInputRef.current.value = '';
+                  }}
+                  onClick={() => {
+                    if (fileInputRef.current) {
+                      fileInputRef.current.value = '';
+                      fileInputRef.current.click();
+                    }
+                  }}
+                >
+                  {file ? (
+                    <div className="selected-file-card" onClick={(e) => e.stopPropagation()}>
+                      <div className="file-info">
+                        <span className="file-icon">📄</span>
+                        <div className="file-meta">
+                          <span className="file-name">{file.name}</span>
+                          <span className="file-size">{(file.size / 1024).toFixed(1)} KB</span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="file-remove-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFile(null);
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                      >
+                        ✕ Change
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <UploadCloud className="drop-icon" size={36} />
+                      <p className="drop-text">Drag & drop your file here, or click to browse</p>
+                      <p className="supported-formats">Supports PDF, DOCX, XLSX, TXT, MD</p>
+                    </>
+                  )}
+                </div>
+              </>
             ) : (
               <div className="textzone">
                 <input

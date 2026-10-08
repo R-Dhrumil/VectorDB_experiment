@@ -66,10 +66,27 @@ def process_file_background(
     embedding_model: str
 ):
     try:
-        set_task_status(task_id, "PROCESSING", {"doc_id": doc_id, "filename": filename})
+        set_task_status(task_id, "PROCESSING", {
+            "doc_id": doc_id,
+            "filename": filename,
+            "message": f"Extracting text from {filename}..."
+        })
 
         # 1. Extract text blocks based on file extension
         blocks = extract_document_blocks(file_bytes, filename)
+        if not blocks or not any(b.get("text", "").strip() for b in blocks):
+            set_task_status(task_id, "FAILED", {
+                "doc_id": doc_id,
+                "filename": filename,
+                "error": f"No printable text found in '{filename}'. If this is a PDF, it may be an image-only/scanned document."
+            })
+            return
+
+        set_task_status(task_id, "PROCESSING", {
+            "doc_id": doc_id,
+            "filename": filename,
+            "message": f"Extracted text across {len(blocks)} sections. Chunking with '{strategy}' strategy..."
+        })
 
         # 2. Clean and chunk blocks into Document objects
         chunks = chunk_document_blocks(
@@ -82,15 +99,33 @@ def process_file_background(
         )
 
         if not chunks:
-            set_task_status(task_id, "FAILED", {"error": "No printable text could be extracted from the document."})
+            set_task_status(task_id, "FAILED", {
+                "doc_id": doc_id,
+                "filename": filename,
+                "error": "Document could not be split into any valid chunks."
+            })
             return
 
-        # 3. Embed with Ollama and store in PostgreSQL pgvector
+        set_task_status(task_id, "PROCESSING", {
+            "doc_id": doc_id,
+            "filename": filename,
+            "message": f"Generating embeddings for {len(chunks)} chunks with Ollama ({embedding_model})..."
+        })
+
+        # 3. Progress callback during batch embedding
+        def on_embedding_progress(current: int, total: int):
+            set_task_status(task_id, "PROCESSING", {
+                "doc_id": doc_id,
+                "filename": filename,
+                "message": f"Embedding and saving chunks: {current}/{total} complete..."
+            })
+
         inserted_count = add_document_chunks(
             chunks=chunks,
             doc_id=doc_id,
             file_name=filename,
-            model_name=embedding_model
+            model_name=embedding_model,
+            progress_callback=on_embedding_progress
         )
 
         set_task_status(task_id, "COMPLETED", {
@@ -98,11 +133,16 @@ def process_file_background(
             "filename": filename,
             "chunks_created": inserted_count,
             "strategy": strategy,
-            "embedding_model": embedding_model
+            "embedding_model": embedding_model,
+            "message": f"Successfully chunked and embedded {inserted_count} chunks in PostgreSQL (pgvector)."
         })
 
     except Exception as e:
-        set_task_status(task_id, "FAILED", {"error": str(e)})
+        set_task_status(task_id, "FAILED", {
+            "doc_id": doc_id,
+            "filename": filename,
+            "error": str(e)
+        })
 
 
 # --- Endpoints ---

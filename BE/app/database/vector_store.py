@@ -1,7 +1,7 @@
 import json
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from app.core.config import (
     POSTGRES_HOST,
     POSTGRES_PORT,
@@ -92,15 +92,17 @@ def add_document_chunks(
     chunks: List[Any], 
     doc_id: str, 
     file_name: str, 
-    model_name: str = DEFAULT_EMBEDDING_MODEL
+    model_name: str = DEFAULT_EMBEDDING_MODEL,
+    progress_callback: Optional[Callable[[int, int], None]] = None
 ) -> int:
     """
-    Embeds document chunks using Ollama and stores them in PostgreSQL pgvector.
+    Embeds document chunks using Ollama in batches and stores them in PostgreSQL pgvector.
     
     :param chunks: List of LangChain Document objects.
     :param doc_id: Unique document identifier.
     :param file_name: Name of the original file.
     :param model_name: Ollama embedding model (e.g. nomic-embed-text).
+    :param progress_callback: Optional callback receiving (processed_count, total_count).
     :return: Number of inserted chunks.
     """
     if not chunks:
@@ -108,15 +110,23 @@ def add_document_chunks(
 
     init_db()
 
-    # Extract text contents
-    contents = [doc.page_content for doc in chunks]
+    total_chunks = len(chunks)
+    batch_size = 15  # Process 15 chunks per batch to prevent Ollama timeout
+    all_embeddings = []
 
-    # Generate embeddings via Ollama in batch
-    embeddings = get_embedding(contents, model=model_name, is_query=False)
+    for i in range(0, total_chunks, batch_size):
+        batch = chunks[i : i + batch_size]
+        batch_contents = [doc.page_content for doc in batch]
+        
+        batch_embs = get_embedding(batch_contents, model=model_name, is_query=False)
+        all_embeddings.extend(batch_embs)
+        
+        if progress_callback:
+            progress_callback(min(i + len(batch), total_chunks), total_chunks)
 
     # Format vector into pgvector string format '[0.1,0.2,...]'
     records = []
-    for idx, (doc, emb) in enumerate(zip(chunks, embeddings)):
+    for idx, (doc, emb) in enumerate(zip(chunks, all_embeddings)):
         meta = doc.metadata.copy() if hasattr(doc, "metadata") and doc.metadata else {}
         meta_json = json.dumps(meta)
         emb_str = f"[{','.join(str(val) for val in emb)}]"
