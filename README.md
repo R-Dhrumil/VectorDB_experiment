@@ -2,6 +2,8 @@
 
 A modular FastAPI backend and React frontend for extracting, chunking, embedding, and interacting with multi-format documents (`PDF`, `DOCX`, `XLSX`, `CSV`, `TXT`, `MD`) using **PostgreSQL (`pgvector`)**, **Ollama (`nomic-embed-text`)**, and Google Gemini LLM.
 
+> 📖 **Full System Documentation:** For an in-depth breakdown of architecture, mathematical distance formulas, real-time polling, and API references, see [DOCUMENTATION.md](file:///Users/apple/Desktop/Dhrumil/VectorDB_experiment/DOCUMENTATION.md).
+
 ---
 
 ## 📁 Project Architecture
